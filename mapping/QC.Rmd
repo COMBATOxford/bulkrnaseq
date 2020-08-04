@@ -1,0 +1,553 @@
+---
+title: "COMBAT RNA-seq QC"
+date: "20th June 2020"
+editor_options: 
+  chunk_output_type: console
+---
+  
+```{r set-up, message=FALSE, warning=FALSE, include=FALSE}
+# RNA-seq QC
+library(ggplot2)
+library(reshape2)
+library(plyr)
+library(dplyr)
+library(grid)
+library(gridExtra)
+library(gdata)
+library(ggrepel)
+library(RColorBrewer)
+library(pheatmap)
+library(edgeR)
+library(lme4)
+
+# Global options
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+options(stringsAsFactors = FALSE)
+```
+
+This document collates initial QC outputs and plots for the bulk RNA-seq data.
+
+## FastQC
+
+This was run by Santiago on the separate fastq files (i.e. 4 per sample) and also
+combined by sample; the combined results are shown here.
+
+GC content should be between 40 and 60%: all samples pass
+
+```{r fastqc}
+r1 <- read.delim("/well/combat/projects/rnaseq/P200133/multiqc/H5LTFDSXY.merged/H5LTFDSXY.R1_data/multiqc_fastqc.txt")
+r2 <- read.delim("/well/combat/projects/rnaseq/P200133/multiqc/H5LTFDSXY.merged/H5LTFDSXY.R2_data/multiqc_fastqc.txt")
+r1$Sample <- gsub("_1", "", r1$Sample)
+r2$Sample <- gsub("_2", "", r2$Sample)
+fastqc <- merge(r1, r2, by.x = "Sample", by.y="Sample")
+
+ggplot(fastqc, aes(X.GC.x, X.GC.y)) +
+  geom_point() +
+  theme_bw() +
+  geom_hline(yintercept = 40, lty=2) +
+  geom_hline(yintercept = 60, lty=2) +
+  geom_vline(xintercept = 40, lty=2) +
+  geom_vline(xintercept = 60, lty=2) +
+  xlab("GC % R1") +
+  ylab("GC % R2")
+```
+
+All fastq files pass adapter content; `r length(unique(fastqc$Sample[fastqc$overrepresented_sequences.x == "fail" | fastqc$overrepresented_sequences.y == "fail"]))` fails overrepresented sequences and `r length(unique(fastqc$Sample[fastqc$overrepresented_sequences.x == "warn" | fastqc$overrepresented_sequences.y == "warn"]))` have a warning for this. 
+
+```{r other-qc-info}
+# information from sequencescape warehouse query
+mapping.stats <- read.delim("/well/combat/projects/rnaseq/CBD-RNA-00001/processing/Mapping/mapping_stats.txt")
+mapping.stats <- mapping.stats[, c("Numberofinputreads",
+                                    "Uniquelymappedreadsnumber", 
+                                   "Uniquelymappedreads.",
+                                   "X.ofreadsmappedtomultipleloci",
+                                   "X.ofreadsmappedtotoomanyloci",
+                                   "X.ofreadsunmapped.tooshort",
+                                   "Averageinputreadlength")]
+
+rnaseqc <- read.delim("/well/combat/projects/rnaseq/CBD-RNA-00001/processing/QC/RNA-SeqQC_metrics.txt")
+dups <- read.delim("/well/combat/projects/rnaseq/CBD-RNA-00001/processing/QC/Duplication_Metrics.txt")
+info <- read.delim("/well/combat/shared/clinicalData/basicData/CBD-CLIN-00002/Final_COMBAT_basic_clinical_data_freeze_180620.txt")
+
+info$baseID <- info$COMBAT_ID
+info$COMBATID <- info$RNASeq_sample_ID
+
+# all(rownames(mapping.stats) == rownames(rnaseqc))
+# all(rownames(mapping.stats) == rownames(dups))
+ss.info <- cbind(mapping.stats, dups, rnaseqc)
+ss.info$Sample <- unlist(strsplit(rownames(ss.info), "/"))[seq(1, 288, 2)]
+rownames(ss.info) <- unlist(strsplit(rownames(ss.info), "/"))[seq(1, 288, 2)]
+
+ss.info$baseID <- info$baseID[match(ss.info$Sample, info$COMBATID)]
+ss.info$Group <- info$Source[match(ss.info$Sample, info$COMBATID)]
+ss.info$Age <- info$Age[match(ss.info$Sample, info$COMBATID)]
+ss.info$Sex <- info$Sex[match(ss.info$Sample, info$COMBATID)]
+ss.info$SRS <- as.factor(info$PCR_SRS[match(ss.info$Sample, info$COMBATID)])
+```
+
+# Post-mapping QC metrics
+
+Median number of reads in raw data: `r signif(median(ss.info$Numberofinputreads), 3)`
+
+```{r metrics-plots}
+ggplot(ss.info, aes(Numberofinputreads)) +
+  geom_histogram(bins=50) +
+  theme_bw() +
+  geom_vline(xintercept = 50e6, lty=2) +
+  xlab(label="Number of reads")
+
+ss.info$Uniquelymappedreads. <- as.numeric(gsub("%", "", ss.info$Uniquelymappedreads.))
+ggplot(ss.info, aes(Sample, Uniquelymappedreads.)) +
+  geom_point(aes(colour=Group)) +
+  theme_bw() +
+  ylab("Percentage of reads uniquely mapped") +
+  theme(axis.text.x = element_blank()) +
+  geom_text_repel(data=subset(ss.info, Uniquelymappedreads. < 80), aes(label=Sample))
+
+ggplot(ss.info, aes(Sample, Uniquelymappedreadsnumber)) +
+  geom_point(aes(colour=Group)) +
+  theme_bw() +
+  ylab("Number of Uniquely Mapped Reads") +
+  geom_hline(yintercept = 50e6, lty=2) +
+  theme(axis.text.x = element_blank()) +
+  geom_text_repel(data=subset(ss.info, Uniquelymappedreadsnumber < 50e6), 
+                  aes(label=Sample))
+
+ggplot(ss.info, aes(Uniquelymappedreadsnumber, Uniquelymappedreads.)) +
+  geom_point(aes(colour=Group)) +
+  theme_bw() +
+  geom_hline(yintercept=70, lty=2) +
+  geom_text_repel(data=subset(ss.info, Uniquelymappedreads. < 80), aes(label=Sample)) +
+  xlab("Number of Uniquely mapped Reads") +
+  ylab("Percentage of reads uniquely mapped")
+
+ggplot(ss.info, aes(Uniquelymappedreadsnumber, Percent_Duplicates)) +
+  geom_point(aes(colour=Group)) +
+  theme_bw() +
+  xlab("Number of Uniquely mapped Reads") +
+  ylab("Percentage of duplicate reads") +
+  geom_text_repel(data=subset(ss.info, Percent_Duplicates > 0.8), aes(label=Sample))
+
+ggplot(ss.info, aes(Read_Pairs_Examined, Read_Pair_Optical_Duplicates)) +
+  geom_point(aes(colour=Group)) +
+  theme_bw() +
+  xlab("Number of Read pairs examined") +
+  ylab("Number of optical duplicate read pairs")
+
+ggplot(ss.info, aes(Read_Pair_Duplicates, Read_Pair_Optical_Duplicates)) +
+  geom_point(aes(colour=Group)) +
+  theme_bw() +
+  xlab("Number of duplicates") +
+  ylab("Number of optical duplicates") +
+  geom_text_repel(data=subset(ss.info, Percent_Duplicates > 0.8), 
+                  aes(label=Sample))
+
+ggplot(ss.info, aes(Uniquelymappedreads., Percent_Duplicates)) +
+  xlab("Number of Uniquely mapped Reads") +
+  geom_point(aes(colour=Group)) +
+  theme_bw() +
+  xlab("Percentage of uniquely mapped reads") +
+  ylab("Percentage of duplicate reads") +
+  geom_text_repel(data=subset(ss.info, Percent_Duplicates > 0.8), aes(label=Sample))
+
+ggplot(ss.info, aes(Exonic.Rate)) +
+  geom_histogram(bins=100) +
+  theme_bw() +
+  xlab("Proportion of reads mapping to exons")
+
+ggplot(ss.info, aes(rRNA.Rate)) +
+  geom_histogram(bins=100) +
+  theme_bw() +
+  xlab("rRNA rate")
+
+ss.info$X.ofreadsmappedtomultipleloci <- as.numeric(gsub("%", "",                                                         ss.info$X.ofreadsmappedtomultipleloci))
+ggplot(ss.info, aes(X.ofreadsmappedtomultipleloci)) +
+  geom_histogram(bins=100) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values=c("#999999")) +
+  xlab("Percentage of multi-mapping reads")
+
+ss.info$X.ofreadsmappedtotoomanyloci <- as.numeric(gsub("%", "",                                                         ss.info$X.ofreadsmappedtotoomanyloci))
+ggplot(ss.info, aes(X.ofreadsmappedtotoomanyloci)) +
+  geom_histogram(bins=100) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values=c("#999999")) +
+  xlab("Percentage of multi-mapping reads (too many)")
+
+ss.info$X.ofreadsunmapped.tooshort <- as.numeric(gsub("%", "",
+                                        ss.info$X.ofreadsunmapped.tooshort))
+ggplot(ss.info, aes(X.ofreadsunmapped.tooshort)) +
+  geom_histogram(bins=100) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values=c("#999999")) +
+  xlab("Percentage of too short reads")
+
+ggplot(ss.info, aes(Averageinputreadlength)) +
+  geom_histogram(bins=50) +
+  theme_bw() +
+  xlab("Average read length")
+
+ggplot(ss.info, aes(Genes.Detected)) +
+  geom_histogram(bins=100) +
+  theme_bw() +
+  xlab("Number of genes detected")
+ss.info$Sample[which(ss.info$Genes.Detected < 15000)]
+```
+
+## Count data
+
+Filter features: at least 10 reads in at least 7 (5%) samples
+
+```{r counts}
+data.all <- read.delim("/well/combat/projects/rnaseq/CBD-RNA-00001/processing/Counts/Full_count_data.txt",
+                       row.names=1)
+study_rowdata <- as.data.frame(rtracklayer::import("/well/combat/shared/references/GRCh38/Annotation/Genes/genes.gtf"))
+
+library(genefilter)
+f1 <- kOverA(10, 10)
+flist <- filterfun(f1)
+exprs <- genefilter(data.all, flist)
+counts <- data.all[exprs, ]
+study_rowdata_filt <- study_rowdata[match(rownames(counts), study_rowdata$gene_id), ]
+
+rm(f1, flist, exprs)
+dim(counts)
+# 23077 144
+
+ss.info$Sample <- gsub("-", ".", ss.info$Sample)
+ss.info <- ss.info[match(colnames(counts), ss.info$Sample), ]
+rownames(ss.info) <- ss.info$Sample
+# all(colnames(counts) == ss.info$Sample)
+
+y <- DGEList(counts=counts, genes=study_rowdata_filt, samples = ss.info)
+y <- calcNormFactors(y, method="TMM")
+logcpm <- cpm(y, log = F)
+logcpm <- apply(logcpm, 1, function(x){
+  x <- log2(x + 1)
+})
+logcpm <- data.frame(t(logcpm))
+
+pcs <- prcomp(t(logcpm))
+vc.n <- summary(pcs)
+pc_vc.n <- round(vc.n$importance[2, ] * 100, 2)
+pcs <- data.frame(pcs$x)
+
+# all(rownames(pcs) == y$samples$Sample)
+pcs$mappingrate <- y$samples$Uniquelymappedreads.
+pcs$Duplication <- y$samples$Percent_Duplicates
+pcs$Group <- y$samples$Group
+pcs$Sex <- y$samples$Sex
+pcs$Sample <- rownames(pcs)
+
+ggplot(pcs, aes(PC1, PC2)) +
+  theme_bw() +
+  geom_point(aes(colour=Duplication)) +
+  scale_color_gradient(low="blue", high="red") +
+  geom_text_repel(data=subset(pcs, PC2>(100)), 
+            aes(label=Sample)) +
+  xlab(paste0("PC1 (", pc_vc.n[1], "%)")) +
+  ylab(paste0("PC2 (", pc_vc.n[2], "%)"))
+
+ggplot(pcs, aes(PC3, PC4)) +
+  theme_bw() +
+  geom_point() +
+  geom_text_repel(data=subset(pcs, PC3<(-100)), 
+            aes(label=Sample)) +
+  xlab(paste0("PC3 (", pc_vc.n[3], "%)")) +
+  ylab(paste0("PC4 (", pc_vc.n[4], "%)"))
+
+ggplot(pcs, aes(PC5, PC6)) +
+  theme_bw() +
+  geom_point() +
+  xlab(paste0("PC5 (", pc_vc.n[5], "%)")) +
+  ylab(paste0("PC6 (", pc_vc.n[6], "%)"))
+
+par(mfrow=c(1, 1))
+boxplot(logcpm, las=2, cex.axis=0.3)
+
+cm <- cor(logcpm)
+ct <- data.matrix(cm < 0.5)
+pheatmap(cm, cexRow = 0.6, cexCol = 0.6, show_rownames = FALSE, legend = FALSE,
+         show_colnames = FALSE, annotation_col=y$samples[, c("Group", "SRS")])
+
+plot(density(logcpm[, 1]), xlim=c(-5, 15), ylim=c(0, 0.7))
+for (i in 2:ncol(logcpm)){
+  lines(density(logcpm[, i]))
+  if(max(density(logcpm[ , i])$y) > 0.4) {
+    print(colnames(logcpm)[i])
+      lines(density(logcpm[, i]), col="red")
+  }
+}
+ss.info$PCAOutlier <- FALSE
+ss.info$PCAOutlier[ss.info$Sample == "N00049.Ja005T.TRGa"] <- TRUE
+rm(i, pcs, ct, cm)
+```
+
+## Globins
+
+```{r globins}
+globins <- study_rowdata_filt$gene_id[study_rowdata_filt$gene_name %in% c("HBA1", "HBA2", "HBB", "HBD")]
+globins <- data.frame(t(counts[rownames(counts) %in% globins, ]))
+colnames(globins) <- study_rowdata_filt$gene_name[match(colnames(globins), study_rowdata_filt$gene_id)]
+globins$Total <- rowSums(globins)
+globins$Sample <- rownames(globins)
+globins$Percent <- (globins$Total/y$samples$lib.size)*100
+
+ggplot(globins, aes(Percent)) +
+  geom_histogram(bins=50) +
+  theme_bw()
+
+globins.m <- melt(globins, id.vars = c("Sample", "Total", "Percent"))
+globins.m$Group <- ss.info$Group[match(globins.m$Sample, ss.info$Sample)]
+ggplot(globins.m, aes(variable, value)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position=position_jitter(width = 0.2), aes(colour=Group)) +
+  theme_bw() +
+  xlab("Gene") +
+  ylab("Counts")
+```
+
+## QC summary
+
+```{r summary-plots}
+# Make summary figure
+ss.info <- ss.info[order(ss.info$Numberofinputreads), ]
+
+qc.summ <- data.frame("Sample" = ss.info$Sample, 
+                      "Read count" = ss.info$Numberofinputreads <= 50e6,
+                      "Mapping rate" = ss.info$Uniquelymappedreads. <= 70,
+                      "Exonic rate" = ss.info$Exonic.Rate <= 0.4,
+                      "Duplicate rate" = ss.info$Percent_Duplicates >= .80,
+                      "Number of genes detected" = ss.info$Genes.Detected < 15000,
+                      "Uniquely mapped reads" = ss.info$Uniquelymappedreadsnumber < 45e6,
+                      "Multi-mapping reads" = ss.info$X.ofreadsmappedtotoomanyloci > 0.15,
+                      "Many short reads" = ss.info$X.ofreadsunmapped.tooshort > 3,
+                      "Globins" = ss.info$Sample %in% globins$Sample[globins$Percent > 1],
+                      "PCA Outlier" = ss.info$PCAOutlier == TRUE)
+
+n.reads <- ss.info[, c("Sample", "Numberofinputreads")]
+n.reads$Sample <- as.character(n.reads$Sample)
+qc.summ <- qc.summ[match(n.reads$Sample, qc.summ$Sample), ]
+qc.summ$Sample <- as.character(qc.summ$Sample)
+
+qc.summ.m <- reshape2::melt(qc.summ, id.vars=c("Sample"))
+qc.summ.m$value <- as.character(qc.summ.m$value)
+qc.summ.m$variable <- factor(qc.summ.m$variable, levels=c("PCA.Outlier",
+                                                          "Number.of.genes.detected",
+                                                          "Exonic.rate",
+                                                          "Globins",
+                                                          "Duplicate.rate",
+                                                          "Many.short.reads",
+                                                          "Multi.mapping.reads",
+                                                          "Mapping.rate",
+                                                          "Uniquely.mapped.reads",
+                                                          "Read.count"))
+
+reads.plot <- ggplot(n.reads, aes(Sample, Numberofinputreads)) +
+  geom_bar(stat="identity") +
+  theme_bw() + 
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(), 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        legend.position = "none") +
+  scale_x_discrete(limits=n.reads$Sample) +
+  geom_hline(yintercept = 50e6, lty=2, col="red") +
+  ggtitle("All samples") +
+  ylab("Number of reads")
+
+qc.heatmap <- ggplot(qc.summ.m, aes(Sample, variable)) + 
+  geom_tile(aes(fill = value)) + 
+  scale_fill_manual(values=c("white", "red")) +
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(), 
+        # axis.text.y = element_text(angle=45),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        legend.position = "none") +
+  scale_x_discrete(limits=unique(qc.summ.m$Sample)) +
+  ylab("")
+
+plots <- list(reads.plot, qc.heatmap)
+grobs <- list()
+widths <- list()
+
+for (i in 1:length(plots)){
+  grobs[[i]] <- ggplotGrob(plots[[i]])
+  widths[[i]] <- grobs[[i]]$widths[2:5]
+}
+
+maxwidth <- do.call(grid::unit.pmax, widths)
+
+for (i in 1:length(grobs)){
+  grobs[[i]]$widths[2:5] <- as.list(maxwidth)
+}
+
+do.call("grid.arrange", c(grobs, ncol = 1))
+```
+
+## Overview of QC'd data
+
+```{r filtering}
+to.rm <- qc.summ$Sample[qc.summ$PCA.Outlier == TRUE]
+to.rm <- unique(to.rm)
+
+ss.info <- ss.info[match(colnames(counts), ss.info$Sample), ]
+counts.red <- counts[, !(ss.info$Sample %in% to.rm)]
+f1 <- kOverA(10, 10)
+flist <- filterfun(f1)
+exprs <- genefilter(counts.red, flist)
+counts.red <- counts.red[exprs, ]
+study_rowdata_filt <- study_rowdata[match(rownames(counts.red), study_rowdata$gene_id), ]
+
+y <- DGEList(counts=counts.red, genes=study_rowdata_filt, 
+             samples = ss.info[!(ss.info$Sample %in% to.rm), ])
+y <- calcNormFactors(y, method="TMM")
+logcpm <- cpm(y, log = F)
+logcpm <-apply(logcpm, 1, function(x){
+  x <- log2(x+1)
+})
+logcpm <- data.frame(t(logcpm))
+```
+
+```{r gene-types}
+types <- data.frame(table(study_rowdata_filt$gene_biotype))
+ggplot(types, aes(Var1, Freq)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=45, hjust = 1)) +
+  scale_y_log10()
+print(types)
+```
+
+We generate a scatter plot with XIST gene (ENSG00000229807 - found only in females) expression in horizontal axis and Y chromosome gene expression (found only in males) in vertical axis, and set the color of each sample according to its donor’s sex.
+
+```{r sex}
+study_data <- counts.red
+gtf <- rtracklayer::import("~/Documents/Covid/data/Homo_sapiens.GRCh38.100.gtf")
+study_rowdata <- as.data.frame(gtf)
+rm(gtf)
+study_rowdata <- study_rowdata[match(rownames(study_data), study_rowdata$gene_id), ]
+
+XIST_Count_study <- study_data[rownames(study_data) =="ENSG00000229807", ]
+
+#get the Y chromosome genes only from rowdata
+study_Y_chrom_data <- dplyr::filter(study_rowdata, seqnames=="Y", gene_biotype=="protein_coding") %>% dplyr::arrange(start)
+
+#get feature counts of Y chromosome related genes
+study_Y_gene_counts <- study_data %>% subset(rownames(study_data) %in% study_Y_chrom_data$gene_id)
+
+# get XIST gene (ENSG00000229807) and all Y chromosome genes
+selected_genes_for_TPM <- study_Y_gene_counts %>% rownames() %>% c("ENSG00000229807")
+
+#Extract fields
+#Perform tpm-normalisation
+lengths = study_rowdata$width
+scaling_factor = rowSums((study_data*100)/lengths)
+tpm = t(t(study_data * 100 * 1e6)/scaling_factor)
+tpm = tpm/lengths
+
+normalized_counts <- tpm[intersect(rownames(tpm), selected_genes_for_TPM),]
+
+normalized_counts_xist <- normalized_counts["ENSG00000229807",]
+normalized_counts_Y <- normalized_counts[-which(rownames(normalized_counts) %in% "ENSG00000229807"),]
+
+#get the mean of Y chromosome related gene feature counts (after tpm normlisation)
+study_Y_gene_mean_counts <- data.frame(Y_chrom_mean = normalized_counts_Y %>% apply(2, mean))
+study_Y_gene_mean_counts <- study_Y_gene_mean_counts %>% mutate(sample_id = rownames(study_Y_gene_mean_counts))
+colnames(study_Y_gene_mean_counts)[which(names(study_Y_gene_mean_counts) == ".")] <- c("Y_chrom_mean")
+
+normalized_counts_xist <- data.frame(ENSG00000229807 = (normalized_counts_xist))
+normalized_counts_xist <- normalized_counts_xist %>% mutate(sample_id = rownames(normalized_counts_xist))
+
+# join Y_chrom and Xist datasets for plot
+joined <- data.frame(dplyr::inner_join(study_Y_gene_mean_counts, normalized_counts_xist, by = "sample_id"))
+info$COMBATID <- gsub("-", ".", info$COMBATID)
+joined$sex <- info$Sex[match(joined$sample_id, info$COMBATID)]
+joined$ENSG00000229807 <- as.numeric(joined$ENSG00000229807)
+joined$Y_chrom_mean <- as.numeric(joined$Y_chrom_mean)
+
+joined$Mismatch <- ((joined$Y_chrom_mean/joined$ENSG00000229807) > 6 & joined$sex == "F") |
+  ((joined$Y_chrom_mean/joined$ENSG00000229807) < (0.01) & joined$sex == "M")
+
+ggplot(joined, aes(x=(ENSG00000229807+1) %>% log2(), 
+                   y=(Y_chrom_mean+1) %>% log2(), label = sample_id)) +
+    geom_point(aes(colour=sex)) +
+    labs(x="Expression XIST", y="Expression genes on Y",
+        title = paste0("GAinS DS - TPM normalized, log2 | Sample Size: ", nrow(joined))) +
+    theme(plot.title = element_text(size = 12, face="italic")) +
+  geom_text_repel(data=subset(joined, Mismatch == TRUE), aes(label=sample_id)) +
+  # geom_abline(intercept = 0, slope = 1, lty=2) +
+  theme_bw()
+```
+
+```{r pca-red}
+pcs <- prcomp(t(logcpm))
+vc.n <- summary(pcs)
+pc_vc.n <- round(vc.n$importance[2, ] * 100, 2)
+loadings <- data.frame(pcs$rotation)
+pcs <- data.frame(pcs$x)
+
+pcs$Group <- y$samples$Group
+pcs$Sex <- y$samples$Sex
+pcs$SRS <- y$samples$SRS
+
+ggplot(pcs, aes(PC1, PC2, colour=Group)) +
+  theme_bw() +
+  geom_point(aes(shape=Sex)) +
+  stat_ellipse() +
+  xlab(paste0("PC1 (", pc_vc.n[1], "%)")) +
+  ylab(paste0("PC2 (", pc_vc.n[2], "%)"))
+
+ggplot(pcs, aes(PC1, PC2, colour=as.factor(SRS))) +
+  theme_bw() +
+  geom_point() +
+  xlab(paste0("PC1 (", pc_vc.n[1], "%)")) +
+  ylab(paste0("PC2 (", pc_vc.n[2], "%)"))
+
+ggplot(pcs, aes(PC3, PC4, colour=Group)) +
+  theme_bw() +
+  geom_point(aes(shape=Sex)) +
+  xlab(paste0("PC3 (", pc_vc.n[3], "%)")) +
+  ylab(paste0("PC4 (", pc_vc.n[4], "%)"))
+
+cm <- cor(logcpm)
+ct <- data.matrix(cm < 0.5)
+pheatmap(cm, cexRow = 0.6, cexCol = 0.6, show_rownames = FALSE, 
+         show_colnames = FALSE, annotation_col=y$samples[, c("Group", "SRS")])
+```
+
+What genes are driving the separation on the PCA plot?
+
+```{r loadings}
+pcloadings <- data.frame(Gene = study_rowdata_filt$gene_name[match(rownames(loadings), 
+                                                    study_rowdata_filt$gene_id)], 
+                         loadings)
+pcloadings <- pcloadings[pcloadings$PC1 > 0.03 | pcloadings$PC1 < -0.025 |
+                           pcloadings$PC2 > 0.05 | pcloadings$PC2 < -0.05, ]
+
+ggplot(pcs, aes(x = PC1, y = PC2)) +
+  geom_segment(data = pcloadings, aes(x = 0, y = 0, xend = (PC1*1500),
+     yend = (PC2*1500)), arrow = arrow(length = unit(1/2, "picas")),
+     color = "grey") +
+  geom_point(aes(colour = Group)) +
+  geom_text_repel(data=pcloadings, aes(x = PC1*1500, y = PC2*1500,
+                  label = Gene)) +
+   theme_bw() +
+  xlab(paste0("PC1 (", pc_vc.n[1], "%)")) +
+  ylab(paste0("PC2 (", pc_vc.n[2], "%)"))
+```
+
+```{r final-output}
+s.info.red <- info[match(colnames(counts.red), info$COMBATID), 1:11]
+# all(colnames(counts.red) == s.info.red$COMBATID)
+# dim(counts.red) # 23063   143
+# write.table(counts.red, "../processeddata/Counts_143_23063.txt", sep="\t")
+# write.table(s.info.red, "../processeddata/Sample_info_143.txt", sep="\t")
+# write.table(logcpm, "../processeddata/Logcpm_143_23063.txt", sep="\t")
+# write.table(study_rowdata_filt, "../processeddata/Gene_info_23063.txt",            sep="\t")
+```
