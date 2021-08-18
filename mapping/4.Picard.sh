@@ -1,21 +1,11 @@
 #!/bin/bash
-#$ -cwd
-#$ -pe shmem 1 -N markdups
-#$ -q short.qc
 
-echo "------------------------------------------------"
-echo `date`: Executing task ${SGE_TASK_ID} of job ${JOB_ID} on `hostname` as user ${USER}
-echo SGE_TASK_FIRST=${SGE_TASK_FIRST}, SGE_TASK_LAST=${SGE_TASK_LAST}, SGE_TASK_STEPSIZE=${SGE_TASK_STEPSIZE}
-echo "Run on host: "`hostname`
-echo "Operating system: "`uname -s`
-echo "Username: "`whoami`
-echo "Started at: "`date`
-echo "------------------------------------------------"
+# 4. Picard
+# task for each sample
 
-# Set parameters
-source config.sh
+# Set parameters and load required modules
 module load SAMtools/1.9-foss-2018b
-MARKDUP=/apps/htseq/gatk-4.0.3.0/gatk
+MARKDUP=/path/to/gatk-4.0.3.0/gatk
 
 # Get sample ID for this task
 SAMPLE_NAME=$(cat $BASEDIR"/mapping.info.txt" | tail -n+${SGE_TASK_ID} | head -1 | cut -f1 )

@@ -12,9 +12,5 @@ logs <- lapply(logs, as.data.frame)
 dup.logs <- rbindlist(logs)
 dup.logs <- as.data.frame(dup.logs)
 rownames(dup.logs) <- sample.names
-colnames(dup.logs) <- c("Library", "Unpaired_Reads_Examined", "Read_Pairs_Examined",
-"Secondary_or_supplementary_reads", "Unmapped_Reads", "Unpaired_Read_Duplicates",
-"Read_Pair_Duplicates", "Read_Pair_Optical_Duplicates", "Percent_Duplicates",
-"Estimated_Library_Size")
 
 write.table(dup.logs, "Duplication_Metrics.txt", sep="\t", quote=FALSE)

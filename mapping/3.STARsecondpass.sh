@@ -1,30 +1,15 @@
 #!/bin/bash
-#$ -cwd
-#$ -pe shmem 8 -N star1stpass
-#$ -q short.qc
 
-echo "------------------------------------------------"
-echo `date`: Executing task ${SGE_TASK_ID} of job ${JOB_ID} on `hostname` as user ${USER}
-echo SGE_TASK_FIRST=${SGE_TASK_FIRST}, SGE_TASK_LAST=${SGE_TASK_LAST}, SGE_TASK_STEPSIZE=${SGE_TASK_STEPSIZE}
-echo "Run on host: "`hostname`
-echo "Operating system: "`uname -s`
-echo "Username: "`whoami`
-echo "Started at: "`date`
-echo "------------------------------------------------"
+# 2. STAR mapping (second pass)
+# task for each sample
 
-# Set parameters
+# Set parameters and load required modules
 source config.sh
 module load STAR/2.7.3a-GCC-8.3.0
 
 # Get sample ID for this task
 SAMPLE_NAME=$(cat $BASEDIR"/mapping.info.txt" | tail -n+${SGE_TASK_ID} | head -1 | cut -f1 )
 echo $SAMPLE_NAME
-
-# Make sample directory
-DIR_SAMPLE_NAME=$MAPPING_DIR$SAMPLE_NAME
-if [[ ! -e $DIR_SAMPLE_NAME ]]; then
-              mkdir -p $DIR_SAMPLE_NAME
-fi
 
 # Get fastq file names
 FASTQ=$(cat $BASEDIR"/mapping.info.txt" | tail -n+${SGE_TASK_ID} | head -1 | cut -f2 )
@@ -43,8 +28,8 @@ STAR --genomeDir $GENOME \
       --readFilesIn $FASTQ1 $FASTQ2 \
       --readFilesCommand gunzip -c \
       --outFileNamePrefix $DIR_SAMPLE_NAME"/"${SAMPLE_NAME}. \
-      --outSAMtype BAM Unsorted \
-      --limitOutSJcollapsed 2000000 \
+      --outSAMtype BAM SortedByCoordinate \
+      --limitSjdbInsertNsj 10000000 \
       --sjdbGTFfile $GTF \
       --outFilterMultimapNmax 20 \
       --alignSJoverhangMin 8 \
@@ -53,6 +38,7 @@ STAR --genomeDir $GENOME \
       --outFilterMismatchNoverReadLmax 0.04 \
       --alignIntronMin 20 \
       --alignIntronMax 1000000 \
-      --alignMatesGapMax 1000000
-
-mv $DIR_SAMPLE_NAME"/"${SAMPLE_NAME}.SJ.out.tab $MAPPING_DIR/${SAMPLE_NAME}.SJ.out.tab
+      --alignMatesGapMax 1000000 \
+      --sjdbFileChrStartEnd $MAPPING_DIR/*.SJ.out.tab \
+      --outFilterType BySJout \
+      --outReadsUnmapped Fastx

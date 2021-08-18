@@ -1,18 +1,9 @@
 #!/bin/bash
-#$ -cwd
-#$ -pe shmem 2 -N counts
-#$ -q short.qc
 
-echo "------------------------------------------------"
-echo `date`: Executing task ${SGE_TASK_ID} of job ${JOB_ID} on `hostname` as user ${USER}
-echo SGE_TASK_FIRST=${SGE_TASK_FIRST}, SGE_TASK_LAST=${SGE_TASK_LAST}, SGE_TASK_STEPSIZE=${SGE_TASK_STEPSIZE}
-echo "Run on host: "`hostname`
-echo "Operating system: "`uname -s`
-echo "Username: "`whoami`
-echo "Started at: "`date`
-echo "------------------------------------------------"
+# 6. Generate feature counts
+# task for each sample
 
-# Set parameters
+# Set parameters and load required modules
 source config.sh
 module load Subread/1.6.4-foss-2018b
 
@@ -26,7 +17,6 @@ if [[ ! -e $DIR_SAMPLE_NAME ]]; then
               mkdir -p $DIR_SAMPLE_NAME
 fi
 
-# Add path to config file
 featureCounts -T 4 -a $GTF -g gene_id \
       -o ${DIR_SAMPLE_NAME}/${SAMPLE_NAME}.counts.txt -p \
       -s 2 $MAPPING_DIR$SAMPLE_NAME/${SAMPLE_NAME}.Aligned.sortedByCoord.out.bam

@@ -21,9 +21,6 @@ for (i in 1:length(myfiles) ) {
 # merge all elements based on first ID columns
 data <- DT[[myfiles[1]]]
 
-# inspect
-head(data)
-
 # now add each additional table with the ID column as key
 for (i in 2:length(myfiles)) {
   y <- DT[[myfiles[i]]]
@@ -35,10 +32,5 @@ for (i in 2:length(myfiles)) {
 rownames(data) <- data$ID
 data <- data[, -1]
 
-# inspect and look at the top row names
-head(data)
-tail(data)
-
 # write data to file
 write.table(data, file = "Full_count_data.txt", sep="\t")
-
